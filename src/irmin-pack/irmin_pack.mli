@@ -44,6 +44,6 @@ end
 module Index (IO: IO) (H: Irmin.Hash.S): sig
   type t
   val v: ?fresh:bool -> IO.t -> t Lwt.t
-  val find: t -> H.t -> int64 Lwt.t
+  val find: t -> H.t -> int64 option Lwt.t
   val append: t -> H.t -> int64 -> unit Lwt.t
 end

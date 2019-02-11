@@ -128,6 +128,8 @@ let test_dict _switch () =
 
 module Index = Irmin_pack.Index(IO)(Irmin.Hash.SHA1)
 
+module Option = struct let get ~error = function Some x -> x | None -> invalid_arg error end
+
 let test_index _switch () =
   IO.v "/tmp/test.index" >>= fun block ->
   Index.v ~fresh:true block >>= fun t ->
@@ -145,13 +147,13 @@ let test_index _switch () =
     h3, o3;
     h4, o4;
   ] >>= fun () ->
-  Index.find t h1 >>= fun x1 ->
+  Index.find t h1 >|= Option.get ~error:"h1 not found" >>= fun x1 ->
   Alcotest.(check int64) "h1" o1 x1;
-  Index.find t h2 >>= fun x2 ->
+  Index.find t h2 >|= Option.get ~error:"h2 not found" >>= fun x2 ->
   Alcotest.(check int64) "h2" o2 x2;
-  Index.find t h3 >>= fun x3 ->
+  Index.find t h3 >|= Option.get ~error:"h3 not found" >>= fun x3 ->
   Alcotest.(check int64) "h3" o3 x3;
-  Index.find t h4 >>= fun x4 ->
+  Index.find t h4 >|= Option.get ~error:"h4 not found" >>= fun x4 ->
   Alcotest.(check int64) "h4" o4 x4;
   Lwt.return ()
 

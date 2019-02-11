@@ -175,7 +175,7 @@ module Index (IO: IO) (H: Irmin.Hash.S) = struct
 
     let r_hash buffer off len =
       assert (len = H.digest_size);
-      match Irmin.Type.decode_bin ~off H.t (Bytes.unsafe_to_string buffer) with
+      match Irmin.Type.decode_bin ~off H.t (Bytes.to_string buffer) with
       | Ok x -> x
       | Error (`Msg e) -> Fmt.failwith "r_hash: %s" e
 
@@ -269,8 +269,7 @@ module Index (IO: IO) (H: Irmin.Hash.S) = struct
 
     let partial k encoder = function
       | `Await -> k encoder
-      | `Entry _
-      | `End -> invalid_encode ()
+      | `Entry _ | `End -> invalid_encode ()
 
     let flush k encoder =
       match encoder.dst with
@@ -287,7 +286,7 @@ module Index (IO: IO) (H: Irmin.Hash.S) = struct
 
     let rec t_flush k encoder =
       let blit encoder len =
-        unsafe_blit encoder.t encoder.t_pos encoder.o encoder.o_pos len ;
+        unsafe_blit encoder.t encoder.t_pos encoder.o (encoder.o_off + encoder.o_pos) len ;
         encoder.o_pos <- encoder.o_pos + len ;
         encoder.t_pos <- encoder.t_pos + len
       in
@@ -301,16 +300,16 @@ module Index (IO: IO) (H: Irmin.Hash.S) = struct
     let set_int64 buf off v =
       let _ : string =
         Irmin.Type.encode_bin ~buf:(buf, off) Irmin.Type.int64 v
-      in
-      ()
+      in ()
 
     let rec encode_offset encoder =
       let k encoder =
         encoder.k <- encode_entry ;
-        `Ok in
+        `Ok
+      in
       let rem = o_rem encoder in
       if rem < 1
-      then flush (fun encoder -> encode_offset encoder) encoder
+      then flush encode_offset encoder
       else
         let s, j, k =
           if rem < offset_size then (
@@ -325,12 +324,15 @@ module Index (IO: IO) (H: Irmin.Hash.S) = struct
         k encoder
 
     and encode_entry encoder value =
-      let k offset encoder =
+      let k encoder =
+        encoder.k <- encode_entry ;
+        `Ok in
+      let k_to_offset offset encoder =
         encoder.offset <- offset ;
         encode_offset encoder in
       match value with
-      | `Await -> assert false
-      | `End -> `Partial
+      | `Await -> k encoder
+      | `End -> flush k encoder
       | `Entry entry ->
         let rem = o_rem encoder in
         if rem < 1
@@ -339,11 +341,11 @@ module Index (IO: IO) (H: Irmin.Hash.S) = struct
           let s, j, k =
             if rem < H.digest_size then (
               t_range encoder H.digest_size ;
-              (encoder.t, 0, t_flush (k entry.offset))
+              (encoder.t, 0, t_flush (k_to_offset entry.offset))
             ) else
               let j = encoder.o_pos in
               encoder.o_pos <- encoder.o_pos + H.digest_size ;
-              (encoder.o, encoder.o_off + j, k entry.offset) in
+              (encoder.o, encoder.o_off + j, k_to_offset entry.offset) in
           let hash = Irmin.Type.encode_bin H.t entry.hash in
           let hash = Bytes.unsafe_of_string hash in
           Bytes.unsafe_blit hash 0 s j H.digest_size;
@@ -364,7 +366,7 @@ module Index (IO: IO) (H: Irmin.Hash.S) = struct
       ; offset= 0L
       ; k= encode_entry }
 
-    let encode encoder = encoder.k encoder
+    let encode encoder v = encoder.k encoder v
   end
 
   type t =
@@ -373,7 +375,8 @@ module Index (IO: IO) (H: Irmin.Hash.S) = struct
     ; cache : (H.t, int64) Hashtbl.t
     ; block : IO.t
     ; mutable i_off : int64
-    ; mutable total : int64
+    ; mutable pos : int64
+    ; mutable max : int64
     ; i : Bytes.t
     ; o : Bytes.t }
 
@@ -385,19 +388,25 @@ module Index (IO: IO) (H: Irmin.Hash.S) = struct
        IO.set_version block '\000' >>= fun () ->
        IO.set_offset block 0L >|= fun () ->
        0L
-     )) >|= fun total ->
-    { encoder= Encoder.encoder `Manual
+     )) >|= fun max ->
+    let encoder = Encoder.encoder `Manual in
+    let o = Bytes.create 4096 in
+    Encoder.dst encoder o 0 4096 ;
+    { encoder
     ; decoder= Decoder.decoder `Manual
     ; cache= Hashtbl.create 512
     ; block
     ; i_off= 0L
-    ; total
+    ; pos= 0L
+    ; max
     ; i= Bytes.create 4096
-    ; o= Bytes.create 4096 }
+    ; o }
+
+  (* XXX(dinosaure): pos & max is like a queue... *)
 
   let find t key =
     match Hashtbl.find t.cache key with
-    | offset -> Lwt.return offset
+    | offset -> Lwt.return (Some offset)
     | exception Not_found ->
       let rec go () = match Decoder.decode t.decoder with
         | `Await ->
@@ -406,30 +415,37 @@ module Index (IO: IO) (H: Irmin.Hash.S) = struct
           Decoder.src t.decoder t.i 0 4096 ;
           go ()
         | `Entry { hash; offset } ->
+          t.pos <- Int64.succ t.pos ;
           Hashtbl.add t.cache hash offset ;
           if Irmin.Type.equal H.t hash key
-          then Lwt.return offset
-          else go ()
+          then ( Lwt.return (Some offset) )
+          else (if Int64.equal t.pos t.max then Lwt.return None else go () )
         | `Malformed _ -> assert false
         | `End -> assert false
-      in
-      go ()
+      in go ()
 
   let append t key value =
-    let rec go () =
-      match Encoder.encode t.encoder (`Entry { hash= key; offset= value }) with
+    let rec flush = function
       | `Partial ->
-        let data = Bytes.sub_string t.o 0 (Encoder.dst_rem t.encoder) in
-        IO.append t.block data >>= fun () ->
+        let raw = Bytes.sub_string t.o 0 (Bytes.length t.o - (Encoder.dst_rem t.encoder)) in
+        IO.append t.block raw >>= fun () ->
         Encoder.dst t.encoder t.o 0 (Bytes.length t.o) ;
-        go ()
+        flush (Encoder.encode t.encoder `Await)
       | `Ok ->
-        IO.set_offset t.block (Int64.succ t.total) >>= fun () ->
-        t.total <- Int64.succ t.total ;
+        IO.set_offset t.block (Int64.succ t.max) >>= fun () ->
+        t.max <- Int64.succ t.max ;
         Lwt.return ()
     in
-    go ()
-
+    let rec go = function
+      | `Partial ->
+        let raw = Bytes.sub_string t.o 0 (Bytes.length t.o - (Encoder.dst_rem t.encoder)) in
+        IO.append t.block raw >>= fun () ->
+        Encoder.dst t.encoder t.o 0 (Bytes.length t.o) ;
+        go (Encoder.encode t.encoder `Await)
+      | `Ok ->
+        flush (Encoder.encode t.encoder `End)
+    in
+    go (Encoder.encode t.encoder (`Entry { hash= key; offset= value }))
 end
 
 
