@@ -64,8 +64,8 @@ module IO = struct
     ) >>= fun () ->
     Lwt_unix.openfile file Unix.[O_CREAT; O_RDWR] 0o644 >>= fun fd ->
     let buf =
-      Unix.map_file (Lwt_unix.unix_file_descr fd)
-        Bigarray.char Bigarray.c_layout false [| -1 |]
+      Unix.map_file (Lwt_unix.unix_file_descr fd) ~pos:0L
+        Bigarray.char Bigarray.c_layout false [| 9 |]
       |> Bigarray.array1_of_genarray
       |> Cstruct.of_bigarray
     in
