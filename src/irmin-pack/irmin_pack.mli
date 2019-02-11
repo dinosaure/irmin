@@ -40,3 +40,10 @@ module Dict (IO: IO): sig
   val find: t -> string -> int Lwt.t
   val v: ?fresh:bool -> IO.t -> t Lwt.t
 end
+
+module Index (IO: IO) (H: Irmin.Hash.S): sig
+  type t
+  val v: ?fresh:bool -> IO.t -> t Lwt.t
+  val find: t -> H.t -> int64 Lwt.t
+  val append: t -> H.t -> int64 -> unit Lwt.t
+end

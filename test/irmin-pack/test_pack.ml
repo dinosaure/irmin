@@ -51,7 +51,16 @@ module IO = struct
   let get_version t = Lwt.return (Cstruct.get_char t.version 0)
   let get_offset t = Lwt.return (Cstruct.BE.get_uint64 t.offset 0)
 
+  let file_size = 40_000_000_000
+
   let v file =
+    (Lwt_unix.file_exists file >>= function
+      | true  -> Lwt.return ()
+      | false ->
+        Lwt_unix.openfile file Unix.[O_CREAT; O_RDWR] 0o644 >>= fun fd ->
+        Lwt_unix.ftruncate fd file_size >>= fun () ->
+        Lwt_unix.close fd
+    ) >>= fun () ->
     Lwt_unix.openfile file Unix.[O_CREAT; O_RDWR] 0o644 >>= fun fd ->
     let buf =
       Unix.map_file (Lwt_unix.unix_file_descr fd)
@@ -59,11 +68,6 @@ module IO = struct
       |> Bigarray.array1_of_genarray
       |> Cstruct.of_bigarray
     in
-    (if Cstruct.len buf < Int64.to_int header  then
-       Lwt_unix.ftruncate fd (Int64.to_int header + 1)
-     else
-       Lwt.return ())
-    >>= fun () ->
     let version = Cstruct.sub buf 0 1 in
     let offset = Cstruct.sub buf 1 8 in
     let n = Cstruct.BE.get_uint64 offset 0 in
@@ -89,7 +93,7 @@ let suite = { Irmin_test.name = "PACK"; init; clean; config; store; stats }
 module Dict = Irmin_pack.Dict(IO)
 
 let test_dict _switch () =
-  IO.v "/tmp/test" >>= fun block ->
+  IO.v "/tmp/test.dict" >>= fun block ->
   Dict.v ~fresh:true block >>= fun dict ->
   Dict.find dict "foo"  >>= fun x1 ->
   Alcotest.(check int) "foo" 0 x1;
@@ -108,4 +112,37 @@ let test_dict _switch () =
   Alcotest.(check int) "titiabc" 3 x4;
   Lwt.return ()
 
-let misc = "misc", [Alcotest_lwt.test_case "dictionnaries" `Quick test_dict]
+module Index = Irmin_pack.Index(IO)(Irmin.Hash.SHA1)
+
+let test_index _switch () =
+  IO.v "/tmp/test.index" >>= fun block ->
+  Index.v ~fresh:true block >>= fun t ->
+  let h1 = Irmin.Hash.SHA1.digest "foo" in
+  let o1 = 42L in
+  let h2 = Irmin.Hash.SHA1.digest "bar" in
+  let o2 = 142L in
+  let h3 = Irmin.Hash.SHA1.digest "otoo" in
+  let o3 = 10_098L in
+  let h4 = Irmin.Hash.SHA1.digest "sdadsadas" in
+  let o4 = 8978_232L in
+  Lwt_list.iter_s (fun (h, o) -> Index.append t h o) [
+    h1, o1;
+    h2, o2;
+    h3, o3;
+    h4, o4;
+  ] >>= fun () ->
+  Index.find t h1 >>= fun x1 ->
+  Alcotest.(check int64) "h1" o1 x1;
+  Index.find t h2 >>= fun x2 ->
+  Alcotest.(check int64) "h2" o2 x2;
+  Index.find t h3 >>= fun x3 ->
+  Alcotest.(check int64) "h3" o3 x3;
+  Index.find t h4 >>= fun x4 ->
+  Alcotest.(check int64) "h4" o4 x4;
+  Lwt.return ()
+
+
+let misc = "misc", [
+    Alcotest_lwt.test_case "dict"  `Quick test_dict;
+    Alcotest_lwt.test_case "index" `Quick test_index;
+  ]
