@@ -58,8 +58,9 @@ module IO = struct
       | true  -> Lwt.return ()
       | false ->
         Lwt_unix.openfile file Unix.[O_CREAT; O_RDWR] 0o644 >>= fun fd ->
-        Lwt_unix.LargeFile.ftruncate fd file_size >>= fun () ->
-        Lwt_unix.close fd
+        Lwt_unix.LargeFile.lseek fd file_size Unix.SEEK_SET >>= fun _ ->
+        Lwt_unix.write fd (Bytes.of_string "\000") 0 1 >|= fun _ ->
+        ()
     ) >>= fun () ->
     Lwt_unix.openfile file Unix.[O_CREAT; O_RDWR] 0o644 >>= fun fd ->
     let buf =
