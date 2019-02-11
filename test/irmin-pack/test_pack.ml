@@ -62,7 +62,7 @@ module IO = struct
         Lwt_unix.write fd (Bytes.of_string "\000") 0 1 >|= fun _ ->
         ()
     ) >>= fun () ->
-    Lwt_unix.openfile file Unix.[O_CREAT; O_RDWR] 0o644 >>= fun fd ->
+    Lwt_unix.openfile file Unix.[O_EXCL; O_RDWR] 0o644 >>= fun fd ->
     let buf =
       Unix.map_file (Lwt_unix.unix_file_descr fd) ~pos:0L
         Bigarray.char Bigarray.c_layout false [| 9 |]
