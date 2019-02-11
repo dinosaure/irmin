@@ -269,7 +269,8 @@ module Index (IO: IO) (H: Irmin.Hash.S) = struct
 
     let partial k encoder = function
       | `Await -> k encoder
-      | `Entry _ | `End -> invalid_encode ()
+      | `Entry _
+      | `End -> invalid_encode ()
 
     let flush k encoder =
       match encoder.dst with
@@ -381,9 +382,10 @@ module Index (IO: IO) (H: Irmin.Hash.S) = struct
     if version <> '\000' then Fmt.failwith "invalid version";
     (if not fresh then IO.get_offset block
      else (
-        IO.set_offset block 0L >|= fun () ->
-        0L
-      )) >|= fun total ->
+       IO.set_version block '\000' >>= fun () ->
+       IO.set_offset block 0L >|= fun () ->
+       0L
+     )) >|= fun total ->
     { encoder= Encoder.encoder `Manual
     ; decoder= Decoder.decoder `Manual
     ; cache= Hashtbl.create 512

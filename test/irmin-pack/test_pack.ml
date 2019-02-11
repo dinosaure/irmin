@@ -51,14 +51,14 @@ module IO = struct
   let get_version t = Lwt.return (Cstruct.get_char t.version 0)
   let get_offset t = Lwt.return (Cstruct.BE.get_uint64 t.offset 0)
 
-  let file_size = 40_000_000_000
+  let file_size = 400_960_000_000L
 
   let v file =
     (Lwt_unix.file_exists file >>= function
       | true  -> Lwt.return ()
       | false ->
         Lwt_unix.openfile file Unix.[O_CREAT; O_RDWR] 0o644 >>= fun fd ->
-        Lwt_unix.ftruncate fd file_size >>= fun () ->
+        Lwt_unix.LargeFile.ftruncate fd file_size >>= fun () ->
         Lwt_unix.close fd
     ) >>= fun () ->
     Lwt_unix.openfile file Unix.[O_CREAT; O_RDWR] 0o644 >>= fun fd ->
