@@ -6,7 +6,7 @@
 (executable
  (name      test)
  (modules   test)
- (libraries digestif.ocaml test_pack io-page-unix))
+ (libraries digestif.ocaml test_pack))
 
 (alias
  (name    runtest)

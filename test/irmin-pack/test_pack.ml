@@ -17,29 +17,58 @@
 open Lwt.Infix
 
 module IO = struct
-  type t = Lwt_unix.file_descr
 
-  let open_file file =
-    Lwt_unix.openfile file Unix.[O_CREAT; O_RDWR] 0o644
+  type t = {
+    version: Cstruct.t;
+    offset : Cstruct.t;
+    fd     : Lwt_unix.file_descr;
+  }
 
-  let append t ~off buf =
+  let header = 9L
+
+  let (++) = Int64.add
+
+  let append t buf =
     let buf = Bytes.unsafe_of_string buf in
     let rec aux off len =
-      Lwt_unix.write t buf off len >>= fun w ->
+      Lwt_unix.write t.fd buf off len >>= fun w ->
       if w = 0 then Lwt.return ()
       else aux (off+w) (len-w)
     in
-    Lwt_unix.LargeFile.lseek t off Unix.SEEK_SET >>= fun _ ->
     aux 0 (Bytes.length buf)
 
   let read t ~off buf =
     let rec aux off len =
-      Lwt_unix.read t buf off len >>= fun r ->
+      Lwt_unix.read t.fd buf off len >>= fun r ->
       if r = 0 || r = len then Lwt.return ()
       else aux (off+r) (len-r)
     in
-    Lwt_unix.LargeFile.lseek t off Unix.SEEK_SET >>= fun _ ->
+    Lwt_unix.LargeFile.lseek t.fd (header ++ off) Unix.SEEK_SET >>= fun _ ->
     aux 0 (Bytes.length buf)
+
+  let set_version t v = Cstruct.set_char t.version 0 v; Lwt.return ()
+  let set_offset t n = Cstruct.BE.set_uint64 t.offset 0 n; Lwt.return ()
+  let get_version t = Lwt.return (Cstruct.get_char t.version 0)
+  let get_offset t = Lwt.return (Cstruct.BE.get_uint64 t.offset 0)
+
+  let v file =
+    Lwt_unix.openfile file Unix.[O_CREAT; O_RDWR] 0o644 >>= fun fd ->
+    let buf =
+      Unix.map_file (Lwt_unix.unix_file_descr fd)
+        Bigarray.char Bigarray.c_layout false [| -1 |]
+      |> Bigarray.array1_of_genarray
+      |> Cstruct.of_bigarray
+    in
+    (if Cstruct.len buf < Int64.to_int header  then
+       Lwt_unix.ftruncate fd (Int64.to_int header + 1)
+     else
+       Lwt.return ())
+    >>= fun () ->
+    let version = Cstruct.sub buf 0 1 in
+    let offset = Cstruct.sub buf 1 8 in
+    let n = Cstruct.BE.get_uint64 offset 0 in
+    Lwt_unix.LargeFile.lseek fd (n ++ header) Unix.SEEK_SET >|= fun _ ->
+    { version; offset; fd }
 
 end
 
@@ -60,7 +89,7 @@ let suite = { Irmin_test.name = "PACK"; init; clean; config; store; stats }
 module Dict = Irmin_pack.Dict(IO)
 
 let test_dict _switch () =
-  IO.open_file "/tmp/test" >>= fun block ->
+  IO.v "/tmp/test" >>= fun block ->
   Dict.v ~fresh:true block >>= fun dict ->
   Dict.find dict "foo"  >>= fun x1 ->
   Alcotest.(check int) "foo" 0 x1;

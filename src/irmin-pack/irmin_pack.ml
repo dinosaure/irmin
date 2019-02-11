@@ -21,9 +21,20 @@ module Log = (val Logs.src_log src : Logs.LOG)
 
 module type IO = sig
   type t
-  val append: t -> off:int64 -> string -> unit Lwt.t
+
+  val append: t -> string -> unit Lwt.t
+
+  (** offset starts after the headers (with version and offset) *)
   val read: t -> off:int64 -> bytes -> unit Lwt.t
+
+  val set_version: t -> char -> unit Lwt.t
+  val set_offset: t -> int64 -> unit Lwt.t
+
+  val get_version: t -> char Lwt.t
+  val get_offset: t -> int64 Lwt.t
 end
+
+(* Store filenames *)
 
 module Dict (IO: IO) = struct
 
@@ -35,14 +46,11 @@ module Dict (IO: IO) = struct
 
   let append_string t v =
     let len = Int32.of_int (String.length v) in
-    IO.append t.block ~off:t.offset Irmin.Type.(encode_bin int32 len)
-    >>= fun () ->
-    IO.append t.block ~off:Int64.(add t.offset 4L) v
-    >|= fun () ->
+    IO.append t.block Irmin.Type.(encode_bin int32 len) >>= fun () ->
+    IO.append t.block v >|= fun () ->
     Int64.add t.offset Int64.(of_int (4 + String.length v))
 
-  let update_offset t =
-    IO.append t.block ~off:0L Irmin.Type.(encode_bin int64 t.offset)
+  let update_offset t = IO.set_offset t.block t.offset
 
   let find t v =
     Log.debug (fun l -> l "[dict] find %S" v);
@@ -54,15 +62,6 @@ module Dict (IO: IO) = struct
       update_offset t >>= fun () ->
       Hashtbl.add t.cache v id;
       Lwt.return id
-
-  let length64 ~off block =
-    let page = Bytes.create 8 in
-    IO.read block ~off page >|= fun () ->
-    match
-      Irmin.Type.(decode_bin ~exact:true int64) (Bytes.unsafe_to_string page)
-    with
-    | Error (`Msg e) -> Fmt.failwith "length: %s" e
-    | Ok n -> n
 
   let length32 ~off block =
     let page = Bytes.create 4 in
@@ -76,11 +75,14 @@ module Dict (IO: IO) = struct
   let v ?(fresh=false) block =
     let cache = Hashtbl.create 997 in
     if fresh then (
-      let buf = Irmin.Type.(encode_bin int64) 0L in
-      IO.append block ~off:0L buf >|= fun () ->
-      { cache; block; offset = 8L }
+      Printf.printf "XXX0\n%!";
+      IO.set_version block '\000' >>= fun () ->
+      Printf.printf "XXX1\n%!";
+      IO.set_offset block 0L >|= fun () ->
+      Printf.printf "XXX2\n%!";
+      { cache; block; offset = 0L }
     ) else (
-      length64 ~off:0L block >>= fun len ->
+      IO.get_offset block >>= fun len ->
       let rec aux n offset =
         if offset >= len then Lwt.return ()
         else (
@@ -93,7 +95,7 @@ module Dict (IO: IO) = struct
           let off = Int64.add off (Int64.of_int (String.length v)) in
           aux (n+1) off
         ) in
-      aux 0 8L >|= fun () ->
+      aux 0 0L >|= fun () ->
       { cache; block; offset = len }
     )
 end

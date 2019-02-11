@@ -18,8 +18,17 @@ val config: unit -> Irmin.config
 
 module type IO = sig
   type t
-  val append: t -> off:int64 -> string -> unit Lwt.t
+
+  val append: t -> string -> unit Lwt.t
+
+  (** offset starts after the headers (with version and offset) *)
   val read: t -> off:int64 -> bytes -> unit Lwt.t
+
+  val set_version: t -> char -> unit Lwt.t
+  val set_offset: t -> int64 -> unit Lwt.t
+
+  val get_version: t -> char Lwt.t
+  val get_offset: t -> int64 Lwt.t
 end
 
 module Append_only (IO: IO): Irmin.APPEND_ONLY_STORE_MAKER
