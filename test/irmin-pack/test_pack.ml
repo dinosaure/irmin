@@ -28,14 +28,17 @@ module IO = struct
 
   let (++) = Int64.add
 
-  let append t buf =
-    let buf = Bytes.unsafe_of_string buf in
+  let really_write fd buf =
     let rec aux off len =
-      Lwt_unix.write t.fd buf off len >>= fun w ->
+      Lwt_unix.write fd buf off len >>= fun w ->
       if w = 0 then Lwt.return ()
       else aux (off+w) (len-w)
     in
     aux 0 (Bytes.length buf)
+
+  let append t buf =
+    let buf = Bytes.unsafe_of_string buf in
+    really_write t.fd buf
 
   let read t ~off buf =
     let rec aux off len =
@@ -53,11 +56,18 @@ module IO = struct
 
   let file_size = 400_960_000_000L
 
+  let char c = Bytes.unsafe_of_string (Irmin.Type.(encode_bin char) c)
+  let int64 n = Bytes.unsafe_of_string (Irmin.Type.(encode_bin int64) n)
+
+  let version = '\000'
+
   let v file =
     (Lwt_unix.file_exists file >>= function
       | true  -> Lwt.return ()
       | false ->
         Lwt_unix.openfile file Unix.[O_CREAT; O_RDWR] 0o644 >>= fun fd ->
+        really_write fd (char version) >>= fun () ->
+        really_write fd (int64 0L) >>= fun () ->
         Lwt_unix.LargeFile.lseek fd file_size Unix.SEEK_SET >>= fun _ ->
         Lwt_unix.write fd (Bytes.of_string "\000") 0 1 >|= fun _ ->
         ()
