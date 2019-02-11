@@ -36,18 +36,21 @@ module IO = struct
     in
     aux 0 (Bytes.length buf)
 
+  let really_read fd buf =
+    let rec aux off len =
+      Lwt_unix.read fd buf off len >>= fun r ->
+      if r = 0 || r = len then Lwt.return ()
+      else aux (off+r) (len-r)
+    in
+    aux 0 (Bytes.length buf)
+
   let append t buf =
     let buf = Bytes.unsafe_of_string buf in
     really_write t.fd buf
 
   let read t ~off buf =
-    let rec aux off len =
-      Lwt_unix.read t.fd buf off len >>= fun r ->
-      if r = 0 || r = len then Lwt.return ()
-      else aux (off+r) (len-r)
-    in
     Lwt_unix.LargeFile.lseek t.fd (header ++ off) Unix.SEEK_SET >>= fun _ ->
-    aux 0 (Bytes.length buf)
+    really_read t.fd buf
 
   let set_version t v = Cstruct.set_char t.version 0 v; Lwt.return ()
   let set_offset t n = Cstruct.BE.set_uint64 t.offset 0 n; Lwt.return ()
