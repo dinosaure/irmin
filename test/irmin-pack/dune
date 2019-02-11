@@ -1,12 +1,12 @@
 (library
  (name      test_pack)
  (modules   test_pack)
- (libraries irmin-test irmin-pack))
+ (libraries irmin-test irmin-pack alcotest-lwt))
 
 (executable
  (name      test)
  (modules   test)
- (libraries digestif.ocaml test_pack))
+ (libraries digestif.ocaml test_pack io-page-unix))
 
 (alias
  (name    runtest)

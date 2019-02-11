@@ -16,11 +16,18 @@
 
 val config: unit -> Irmin.config
 
-
 module type IO = sig
-  val open_file: string -> Cstruct.t
+  type t
+  val append: t -> off:int64 -> string -> unit Lwt.t
+  val read: t -> off:int64 -> bytes -> unit Lwt.t
 end
 
 module Append_only (IO: IO): Irmin.APPEND_ONLY_STORE_MAKER
 module Make (IO: IO): Irmin.S_MAKER
 module KV (IO: IO): Irmin.KV_MAKER
+
+module Dict (IO: IO): sig
+  type t
+  val find: t -> string -> int Lwt.t
+  val v: ?fresh:bool -> IO.t -> t Lwt.t
+end

@@ -17,8 +17,30 @@
 open Lwt.Infix
 
 module IO = struct
+  type t = Lwt_unix.file_descr
 
-  let open_file _file = failwith "TODO" (* Unix.map_file *)
+  let open_file file =
+    Lwt_unix.openfile file Unix.[O_CREAT; O_RDWR] 0o644
+
+  let append t ~off buf =
+    let buf = Bytes.unsafe_of_string buf in
+    let rec aux off len =
+      Lwt_unix.write t buf off len >>= fun w ->
+      if w = 0 then Lwt.return ()
+      else aux (off+w) (len-w)
+    in
+    Lwt_unix.LargeFile.lseek t off Unix.SEEK_SET >>= fun _ ->
+    aux 0 (Bytes.length buf)
+
+  let read t ~off buf =
+    let rec aux off len =
+      Lwt_unix.read t buf off len >>= fun r ->
+      if r = 0 || r = len then Lwt.return ()
+      else aux (off+r) (len-r)
+    in
+    Lwt_unix.LargeFile.lseek t off Unix.SEEK_SET >>= fun _ ->
+    aux 0 (Bytes.length buf)
+
 end
 
 let store =
@@ -34,3 +56,27 @@ let clean () =
 let init () = Lwt.return_unit
 let stats = None
 let suite = { Irmin_test.name = "PACK"; init; clean; config; store; stats }
+
+module Dict = Irmin_pack.Dict(IO)
+
+let test_dict _switch () =
+  IO.open_file "/tmp/test" >>= fun block ->
+  Dict.v ~fresh:true block >>= fun dict ->
+  Dict.find dict "foo"  >>= fun x1 ->
+  Alcotest.(check int) "foo" 0 x1;
+  Dict.find dict "foo"  >>= fun x1 ->
+  Alcotest.(check int) "foo" 0 x1;
+  Dict.find dict "bar"  >>= fun x2 ->
+  Alcotest.(check int) "bar" 1 x2;
+  Dict.find dict "toto" >>= fun x3 ->
+  Alcotest.(check int) "toto" 2 x3;
+  Dict.find dict "titiabc" >>= fun x4 ->
+  Alcotest.(check int) "titiabc" 3 x4;
+  Dict.find dict "foo"  >>= fun x1 ->
+  Alcotest.(check int) "foo" 0 x1;
+  Dict.v block >>= fun dict2 ->
+  Dict.find dict2 "titiabc" >>= fun x4 ->
+  Alcotest.(check int) "titiabc" 3 x4;
+  Lwt.return ()
+
+let misc = "misc", [Alcotest_lwt.test_case "dictionnaries" `Quick test_dict]
